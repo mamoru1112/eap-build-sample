@@ -1,0 +1,163 @@
+apiVersion: template.openshift.io/v1
+kind: Template
+metadata:
+  name: eap74-basic-s2i-build
+objects:
+- apiVersion: image.openshift.io/v1
+  kind: ImageStream
+  metadata:
+    labels:
+      application: ${APPLICATION_NAME}
+    name: ${APPLICATION_NAME}
+- apiVersion: image.openshift.io/v1
+  kind: ImageStream
+  metadata:
+    labels:
+      application: ${APPLICATION_NAME}
+    name: ${APPLICATION_NAME}-build-artifacts
+- apiVersion: build.openshift.io/v1
+  kind: BuildConfig
+  metadata:
+    labels:
+      application: ${APPLICATION_NAME}
+    name: ${APPLICATION_NAME}-build-artifacts
+  spec:
+    output:
+      to:
+        kind: ImageStreamTag
+        name: ${APPLICATION_NAME}-build-artifacts:latest
+    source:
+      contextDir: ${CONTEXT_DIR}
+      git:
+        ref: ${SOURCE_REPOSITORY_REF}
+        uri: ${SOURCE_REPOSITORY_URL}
+      type: Git
+    strategy:
+      sourceStrategy:
+        env:
+        - name: MAVEN_MIRROR_URL
+          value: ${MAVEN_MIRROR_URL}
+        - name: MAVEN_ARGS_APPEND
+          value: ${MAVEN_ARGS_APPEND}
+        - name: GALLEON_PROVISION_LAYERS
+          value: ${GALLEON_PROVISION_LAYERS}
+        - name: GALLEON_PROVISION_DEFAULT_FAT_SERVER
+          value: "true"
+        - name: ARTIFACT_DIR
+          value: ${ARTIFACT_DIR}
+        forcePull: true
+        from:
+          kind: ImageStreamTag
+          name: ${EAP_IMAGE_NAME}
+          namespace: ${IMAGE_STREAM_NAMESPACE}
+        incremental: true
+      type: Source
+    triggers:
+    - github:
+        secret: ${GITHUB_WEBHOOK_SECRET}
+      type: GitHub
+    - generic:
+        secret: ${GENERIC_WEBHOOK_SECRET}
+      type: Generic
+    - imageChange: {}
+      type: ImageChange
+    - type: ConfigChange
+- apiVersion: build.openshift.io/v1
+  kind: BuildConfig
+  metadata:
+    labels:
+      application: ${APPLICATION_NAME}
+    name: ${APPLICATION_NAME}
+  spec:
+    output:
+      to:
+        kind: ImageStreamTag
+        name: ${APPLICATION_NAME}:latest
+    source:
+      dockerfile: |-
+        FROM ${EAP_RUNTIME_IMAGE_NAME}
+        COPY /server $JBOSS_HOME
+        USER root
+        RUN chown -R jboss:root $JBOSS_HOME && chmod -R ug+rwX $JBOSS_HOME
+        USER jboss
+        CMD $JBOSS_HOME/bin/openshift-launch.sh
+      images:
+      - from:
+          kind: ImageStreamTag
+          name: ${APPLICATION_NAME}-build-artifacts:latest
+        paths:
+        - destinationDir: .
+          sourcePath: /s2i-output/server/
+    strategy:
+      dockerStrategy:
+        from:
+          kind: ImageStreamTag
+          name: ${EAP_RUNTIME_IMAGE_NAME}
+          namespace: ${IMAGE_STREAM_NAMESPACE}
+        imageOptimizationPolicy: SkipLayers
+      type: Docker
+    triggers:
+    - imageChange:
+        from:
+          kind: ImageStreamTag
+          name: ${APPLICATION_NAME}-build-artifacts:latest
+      type: ImageChange
+    - type: ConfigChange
+parameters:
+- description: "The name for the application."
+  displayName: Application Name
+  name: APPLICATION_NAME
+  required: true
+  value: eap-app
+- description: 'Name of the EAP image to use, example: jboss-eap74-openjdk11-openshift:latest'
+  displayName: EAP Image Name
+  name: EAP_IMAGE_NAME
+  required: true
+  value: jboss-eap74-openjdk11-openshift:7.4.0
+- description: 'Name of the EAP image to use, example: jboss-eap74-openjdk11-runtime-openshift:latest'
+  displayName: EAP Runtime Image Name
+  name: EAP_RUNTIME_IMAGE_NAME
+  required: true
+  value: jboss-eap74-openjdk11-runtime-openshift:7.4.0
+- description: Git source URI for application
+  displayName: Git Repository URL
+  name: SOURCE_REPOSITORY_URL
+  required: true
+  value: https://github.com/jboss-developer/jboss-eap-quickstarts.git
+- description: Git branch/tag reference
+  displayName: Git Reference
+  name: SOURCE_REPOSITORY_REF
+  value: 7.4.x
+- description: Path within Git project to build; empty for root project directory.
+  displayName: Context Directory
+  name: CONTEXT_DIR
+  value: kitchensink
+- description: Comma separated list of Galleon layers to provision a server.
+  displayName: Galleon layers
+  name: GALLEON_PROVISION_LAYERS
+- description: GitHub trigger secret
+  displayName: Github Webhook Secret
+  from: '[a-zA-Z0-9]{8}'
+  generate: expression
+  name: GITHUB_WEBHOOK_SECRET
+  required: true
+- description: Generic build trigger secret
+  displayName: Generic Webhook Secret
+  from: '[a-zA-Z0-9]{8}'
+  generate: expression
+  name: GENERIC_WEBHOOK_SECRET
+  required: true
+- description: Namespace in which the ImageStreams for Red Hat Middleware images are installed. These ImageStreams are normally installed in the openshift namespace. You should only need to modify this if you've installed the ImageStreams in a different namespace/project.
+  displayName: ImageStream Namespace
+  name: IMAGE_STREAM_NAMESPACE
+  required: true
+  value: openshift
+- description: Maven mirror to use for S2I builds
+  displayName: Maven mirror URL
+  name: MAVEN_MIRROR_URL
+- description: Maven additional arguments to use for S2I builds
+  displayName: Maven Additional Arguments
+  name: MAVEN_ARGS_APPEND
+  value: -Dcom.redhat.xpaas.repo.jbossorg
+- description: List of directories from which archives will be copied into the deployment folder. If unspecified, all archives in /target will be copied.
+  name: ARTIFACT_DIR
